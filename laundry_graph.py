@@ -4,10 +4,14 @@ from urllib2 import urlopen, URLError
 import sqlite3
 import os
 import time
+import logging
 
 POLL_INTERVAL = 180 #in seconds
 DB_NAME = './laundry.db'
 ESUDS_URL = "http://case-asi.esuds.net/RoomStatus/machineStatus.i?bottomLocationId={0}"
+
+SUCCESS = 0
+ERROR = 1
 
 # These numbers are assigned to each building by eSuds.
 # We chose a sample of buildings on the campus.
@@ -80,13 +84,17 @@ def insertRecords(building, records):
     
     conn = sqlite3.connect(DB_NAME)
     insertRecord = create_insertRecord(conn.cursor())
+    print(records)
     for (machine_id, machine_type, status) in records:
         insertRecord(building, machine_id, machine_type, status)
     conn.commit()
     conn.close()
 
 def getRoomInfo(id):
-    page = urlopen(ESUDS_URL.format(id) ,"")
+    try:
+        page = urlopen(ESUDS_URL.format(id) ,"")
+    except URLError as e:
+        return (ERROR, e)
 
     soup = BeautifulSoup(page.read())
     table = [ #Unpack the table
@@ -106,25 +114,30 @@ def getRoomInfo(id):
         for row
         in table
     ]
-    return table
+    return (SUCCESS,table)
 
 def data_loop():
     data = {}
     succeeded = 0
     errors = []
+
     for i in rooms:
-        try:
-            insertRecords(i, getRoomInfo(i))
+        (status,data) = getRoomInfo(i)
+        if status == SUCCESS:
+            insertRecords(i, data)
             succeeded += 1
-        except URLError as e:
-            errors.append(e)
-    print("{0} requests succeeded, {1} errors".format(succeeded, len(errors)))
-    if len(errors) > 0:
-	for e in errors:
-            print("\t{0}".format(e))
-	print
+        else:
+            errors.append(data)
+
+    if len(errors) == 0:
+	logging.info("{0} requests succeeded, no errors".format(succeeded))
+    else:
+	entry = "{0} requests succeeded, {1} errors\n".format(succeeded, len(errors))
+	entry += '\n'.join(["\t{0}".format(e) for e in errors])
+	logging.error(entry)
 
 def main():
+    logging.basicConfig(filename='laundry.log',level=logging.INFO,format='%(asctime)s %(levelname)s : %(message)s')
     try:
         initializeDB()
         while(True):
